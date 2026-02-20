@@ -3,14 +3,14 @@ import java.util.Properties
 apply plugin: 'com.android.application'
 
 // ===== Manual Configuration =====
-def packageName = "com.erandix.qel"
-def appName = "Qel"
+def packageName = "com.erandix.movie_lander"
+def appName = "Movie Lander"
 def appCode = 1
 def appVersion = "1"
 def sdkMin = 26         // Minimum API 26
 def sdkCompile = 35
-def colorBlack = "#333333"
-def colorPrimary = "#cdcdcd"
+def colorBlack = "#5C829A"
+def colorPrimary = "#5C829A"
 
 // ===== Load Signing Config (only for release) =====
 def keystorePropsFile = rootProject.file("signing.properties")
@@ -49,7 +49,7 @@ android {
     buildTypes {
         debug {
             // Debug build uses default debug key, no signing.properties needed
-            applicationIdSuffix ".debug"
+            applicationIdSuffix ".apk"
             versionNameSuffix "-Erandix"
         }
 
