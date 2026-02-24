@@ -5,12 +5,12 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.telephony.TelephonyManager;
-import android.util.Log;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -22,13 +22,13 @@ import android.webkit.WebViewClient;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
-import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
     private static final int REQUEST_CALL_PERMISSION = 1;
+
     private static final String PREF_NAME = "APP_PREF";
     private static final String KEY_SYSTEM_COLOR = "SYSTEM_COLOR";
 
@@ -36,12 +36,10 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+
+        applySavedColorBeforeLaunch(); 
+
         super.onCreate(savedInstanceState);
-
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-
-        applySavedOrSplashColor();
-
         setContentView(R.layout.activity_main);
 
         webView = findViewById(R.id.webview);
@@ -49,8 +47,6 @@ public class MainActivity extends AppCompatActivity {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
-        settings.setLoadWithOverviewMode(true);
-        settings.setUseWideViewPort(true);
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -71,24 +67,19 @@ public class MainActivity extends AppCompatActivity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    private void applySavedOrSplashColor() {
+
+    private void applySavedColorBeforeLaunch() {
 
         SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
         String savedColor = prefs.getString(KEY_SYSTEM_COLOR, null);
 
-        if (savedColor != null) {
-            applySystemBarColor(savedColor);
-        } else {
-            int splashColor = getResources().getColor(R.color.splash_background);
-            applySystemBarColor(String.format("#%06X", (0xFFFFFF & splashColor)));
-        }
-    }
+        if (savedColor == null) return;
 
-    private void applySystemBarColor(String colorString) {
         try {
-            int color = Color.parseColor(colorString);
-            Window window = getWindow();
+            int color = Color.parseColor(savedColor);
 
+            Window window = getWindow();
+            window.setBackgroundDrawable(new ColorDrawable(color));
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
             window.setStatusBarColor(color);
             window.setNavigationBarColor(color);
@@ -106,9 +97,37 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
 
-        } catch (Exception e) {
-            Log.e("SYSTEM_BAR", "Invalid color: " + colorString);
-        }
+        } catch (Exception ignored) {}
+    }
+
+    private void applySystemBarColor(String colorString) {
+        try {
+            int color = Color.parseColor(colorString);
+
+            Window window = getWindow();
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            window.setStatusBarColor(color);
+            window.setNavigationBarColor(color);
+
+            boolean isLight = isColorLight(color);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                WindowInsetsControllerCompat controller =
+                        new WindowInsetsControllerCompat(window, window.getDecorView());
+
+                controller.setAppearanceLightStatusBars(isLight);
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    controller.setAppearanceLightNavigationBars(isLight);
+                }
+            }
+
+            SharedPreferences.Editor editor =
+                    getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit();
+            editor.putString(KEY_SYSTEM_COLOR, colorString);
+            editor.apply();
+
+        } catch (Exception ignored) {}
     }
 
     private boolean isColorLight(int color) {
@@ -121,8 +140,8 @@ public class MainActivity extends AppCompatActivity {
     private class JSBridge {
 
         @JavascriptInterface
-        public void runUssd(String code) {
-            runOnUiThread(() -> executeUSSD(code));
+        public void setSystemBarsColor(String color) {
+            runOnUiThread(() -> applySystemBarColor(color));
         }
 
         @JavascriptInterface
@@ -131,23 +150,14 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
-        public void setSystemBarsColor(String colorString) {
-            runOnUiThread(() -> {
-
-                applySystemBarColor(colorString);
-
-                // Save for next launch
-                SharedPreferences.Editor editor =
-                        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit();
-                editor.putString(KEY_SYSTEM_COLOR, colorString);
-                editor.apply();
-            });
+        public void runUssd(String code) {
+            runOnUiThread(() -> executeUSSD(code));
         }
     }
 
     private void restartApp() {
         Intent intent = getPackageManager()
-                .getLaunchIntentForPackage(getPackageName());
+            .getLaunchIntentForPackage(getPackageName());
 
         if (intent != null) {
             intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -159,15 +169,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void executeUSSD(String code) {
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            sendResultToWeb("USSD supported on Android 8.0+ only");
-            return;
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
 
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
                 != PackageManager.PERMISSION_GRANTED ||
                 ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
-                        != PackageManager.PERMISSION_GRANTED) {
+                != PackageManager.PERMISSION_GRANTED) {
 
             pendingUSSDCode = code;
 
@@ -183,10 +190,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         TelephonyManager tm = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
-        if (tm == null) {
-            sendResultToWeb("Telephony service unavailable");
-            return;
-        }
+        if (tm == null) return;
 
         tm.sendUssdRequest(code, new TelephonyManager.UssdResponseCallback() {
 
@@ -196,55 +200,13 @@ public class MainActivity extends AppCompatActivity {
                     String request,
                     CharSequence response) {
 
-                sendResultToWeb(response.toString());
-            }
-
-            @Override
-            public void onReceiveUssdResponseFailed(
-                    TelephonyManager telephonyManager,
-                    String request,
-                    int failureCode) {
-
-                sendResultToWeb("USSD failed: " + failureCode);
+                webView.evaluateJavascript(
+                        "showResult('" + response.toString().replace("'", "\\'") + "')",
+                        null
+                );
             }
 
         }, new Handler(Looper.getMainLooper()));
-    }
-
-    private void sendResultToWeb(String message) {
-        String safeMessage = message
-                .replace("\\", "\\\\")
-                .replace("'", "\\'")
-                .replace("\n", "\\n");
-
-        webView.post(() ->
-                webView.evaluateJavascript(
-                        "showResult('" + safeMessage + "')",
-                        null
-                )
-        );
-    }
-
-    @Override
-    public void onRequestPermissionsResult(
-            int requestCode,
-            @NonNull String[] permissions,
-            @NonNull int[] grantResults) {
-
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-
-        if (requestCode == REQUEST_CALL_PERMISSION
-                && grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-
-            if (pendingUSSDCode != null) {
-                executeUSSD(pendingUSSDCode);
-                pendingUSSDCode = null;
-            }
-
-        } else {
-            sendResultToWeb("Permission denied");
-        }
     }
 
     @Override
