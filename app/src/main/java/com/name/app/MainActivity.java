@@ -10,6 +10,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.telephony.TelephonyManager;
 import android.util.Log;
+import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -105,6 +106,33 @@ public class MainActivity extends AppCompatActivity {
                 window.setNavigationBarColor(color);
             }
 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                View decor = window.getDecorView();
+
+                if (colorString.equalsIgnoreCase("#FFFFFF") ||
+                        colorString.equalsIgnoreCase("#FFFFFFFF")) {
+
+                    // White background → dark icons
+                    decor.setSystemUiVisibility(
+                            decor.getSystemUiVisibility()
+                                    | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    );
+
+                } else if (colorString.equalsIgnoreCase("#000000") ||
+                        colorString.equalsIgnoreCase("#FF000000")) {
+
+                    // Black background → light icons
+                    decor.setSystemUiVisibility(
+                            decor.getSystemUiVisibility()
+                                    & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    );
+
+                } else {
+                    // Default system behavior
+                    decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                }
+            }
+
         } catch (IllegalArgumentException e) {
             Log.e("SYSTEM_BAR", "Invalid color: " + colorString);
         }
@@ -119,8 +147,8 @@ public class MainActivity extends AppCompatActivity {
 
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
                 != PackageManager.PERMISSION_GRANTED ||
-            ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
-                != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+                        != PackageManager.PERMISSION_GRANTED) {
 
             pendingUSSDCode = code;
 
@@ -174,8 +202,8 @@ public class MainActivity extends AppCompatActivity {
 
         webView.post(() ->
                 webView.evaluateJavascript(
-                    "showResult('" + safeMessage + "')",
-                    null
+                        "showResult('" + safeMessage + "')",
+                        null
                 )
         );
     }
