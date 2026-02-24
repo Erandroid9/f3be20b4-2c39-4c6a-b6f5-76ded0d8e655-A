@@ -2,6 +2,7 @@ package com.example.ussdwebview;
 
 import android.Manifest;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Build;
@@ -10,7 +11,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.telephony.TelephonyManager;
 import android.util.Log;
-import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -22,21 +22,25 @@ import android.webkit.WebViewClient;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
-import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
     private static final int REQUEST_CALL_PERMISSION = 1;
+    private static final String PREF_NAME = "APP_PREF";
+    private static final String KEY_SYSTEM_COLOR = "SYSTEM_COLOR";
+
     private String pendingUSSDCode;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Enable drawing behind system bars
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+
+        applySavedOrSplashColor();
 
         setContentView(R.layout.activity_main);
 
@@ -45,13 +49,10 @@ public class MainActivity extends AppCompatActivity {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
-        settings.setAllowFileAccess(true);
-        settings.setAllowContentAccess(true);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
 
         webView.setWebViewClient(new WebViewClient() {
-
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 view.loadUrl(url);
@@ -70,7 +71,52 @@ public class MainActivity extends AppCompatActivity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    // ================= JS BRIDGE =================
+    private void applySavedOrSplashColor() {
+
+        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+        String savedColor = prefs.getString(KEY_SYSTEM_COLOR, null);
+
+        if (savedColor != null) {
+            applySystemBarColor(savedColor);
+        } else {
+            int splashColor = getResources().getColor(R.color.splash_background);
+            applySystemBarColor(String.format("#%06X", (0xFFFFFF & splashColor)));
+        }
+    }
+
+    private void applySystemBarColor(String colorString) {
+        try {
+            int color = Color.parseColor(colorString);
+            Window window = getWindow();
+
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            window.setStatusBarColor(color);
+            window.setNavigationBarColor(color);
+
+            boolean isLight = isColorLight(color);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                WindowInsetsControllerCompat controller =
+                        new WindowInsetsControllerCompat(window, window.getDecorView());
+
+                controller.setAppearanceLightStatusBars(isLight);
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    controller.setAppearanceLightNavigationBars(isLight);
+                }
+            }
+
+        } catch (Exception e) {
+            Log.e("SYSTEM_BAR", "Invalid color: " + colorString);
+        }
+    }
+
+    private boolean isColorLight(int color) {
+        double darkness = 1 - (0.299 * Color.red(color)
+                + 0.587 * Color.green(color)
+                + 0.114 * Color.blue(color)) / 255;
+        return darkness < 0.5;
+    }
 
     private class JSBridge {
 
@@ -86,11 +132,18 @@ public class MainActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public void setSystemBarsColor(String colorString) {
-            runOnUiThread(() -> changeSystemBarsColor(colorString));
+            runOnUiThread(() -> {
+
+                applySystemBarColor(colorString);
+
+                // Save for next launch
+                SharedPreferences.Editor editor =
+                        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit();
+                editor.putString(KEY_SYSTEM_COLOR, colorString);
+                editor.apply();
+            });
         }
     }
-
-    // ================= RESTART APP =================
 
     private void restartApp() {
         Intent intent = getPackageManager()
@@ -103,50 +156,6 @@ public class MainActivity extends AppCompatActivity {
 
         finish();
     }
-
-    // ================= SYSTEM BAR COLOR =================
-
-    private void changeSystemBarsColor(String colorString) {
-        try {
-            int color = Color.parseColor(colorString);
-            Window window = getWindow();
-
-            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                window.setStatusBarColor(color);
-                window.setNavigationBarColor(color);
-            }
-
-            // Determine if color is light or dark
-            boolean isLightColor = isColorLight(color);
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                WindowInsetsControllerCompat controller =
-                        new WindowInsetsControllerCompat(window, window.getDecorView());
-
-                // Light background → dark icons
-                controller.setAppearanceLightStatusBars(isLightColor);
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    controller.setAppearanceLightNavigationBars(isLightColor);
-                }
-            }
-
-        } catch (IllegalArgumentException e) {
-            Log.e("SYSTEM_BAR", "Invalid color: " + colorString);
-        }
-    }
-
-    // Detect brightness
-    private boolean isColorLight(int color) {
-        double darkness = 1 - (0.299 * Color.red(color)
-                + 0.587 * Color.green(color)
-                + 0.114 * Color.blue(color)) / 255;
-        return darkness < 0.5;
-    }
-
-    // ================= USSD =================
 
     private void executeUSSD(String code) {
 
@@ -187,7 +196,6 @@ public class MainActivity extends AppCompatActivity {
                     String request,
                     CharSequence response) {
 
-                Log.d("USSD", "Success: " + response);
                 sendResultToWeb(response.toString());
             }
 
@@ -197,7 +205,6 @@ public class MainActivity extends AppCompatActivity {
                     String request,
                     int failureCode) {
 
-                Log.e("USSD", "Failed: " + failureCode);
                 sendResultToWeb("USSD failed: " + failureCode);
             }
 
@@ -217,8 +224,6 @@ public class MainActivity extends AppCompatActivity {
                 )
         );
     }
-
-    // ================= PERMISSIONS =================
 
     @Override
     public void onRequestPermissionsResult(
@@ -241,8 +246,6 @@ public class MainActivity extends AppCompatActivity {
             sendResultToWeb("Permission denied");
         }
     }
-
-    // ================= BACK BUTTON =================
 
     @Override
     public void onBackPressed() {
