@@ -1,13 +1,17 @@
 package com.example.ussdwebview;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.telephony.TelephonyManager;
 import android.util.Log;
+import android.view.Window;
+import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -31,7 +35,6 @@ public class MainActivity extends AppCompatActivity {
 
         webView = findViewById(R.id.webview);
 
-        // WebView settings
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -40,17 +43,14 @@ public class MainActivity extends AppCompatActivity {
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
 
-        // Force all links to open INSIDE WebView
         webView.setWebViewClient(new WebViewClient() {
 
-            // For Android < 8
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 view.loadUrl(url);
                 return true;
             }
 
-            // For Android 8+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 view.loadUrl(request.getUrl().toString());
@@ -58,22 +58,58 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // JavaScript bridge
         webView.addJavascriptInterface(new JSBridge(), "AndroidUSSD");
 
-        // Load local HTML
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    // JS Bridge
     private class JSBridge {
+
         @JavascriptInterface
         public void runUssd(String code) {
             runOnUiThread(() -> executeUSSD(code));
         }
+
+        @JavascriptInterface
+        public void reloadApp() {
+            runOnUiThread(() -> restartApp());
+        }
+
+        @JavascriptInterface
+        public void setSystemBarsColor(String colorString) {
+            runOnUiThread(() -> changeSystemBarsColor(colorString));
+        }
     }
 
-    // USSD execution
+    private void restartApp() {
+        Intent intent = getPackageManager()
+                .getLaunchIntentForPackage(getPackageName());
+
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        }
+
+        finish();
+    }
+
+    private void changeSystemBarsColor(String colorString) {
+        try {
+            int color = Color.parseColor(colorString);
+            Window window = getWindow();
+
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                window.setStatusBarColor(color);
+                window.setNavigationBarColor(color);
+            }
+
+        } catch (IllegalArgumentException e) {
+            Log.e("SYSTEM_BAR", "Invalid color: " + colorString);
+        }
+    }
+
     private void executeUSSD(String code) {
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
@@ -87,6 +123,7 @@ public class MainActivity extends AppCompatActivity {
                 != PackageManager.PERMISSION_GRANTED) {
 
             pendingUSSDCode = code;
+
             ActivityCompat.requestPermissions(
                     this,
                     new String[]{
@@ -129,7 +166,6 @@ public class MainActivity extends AppCompatActivity {
         }, new Handler(Looper.getMainLooper()));
     }
 
-    // Send data back to WebView
     private void sendResultToWeb(String message) {
         String safeMessage = message
                 .replace("\\", "\\\\")
@@ -138,13 +174,12 @@ public class MainActivity extends AppCompatActivity {
 
         webView.post(() ->
                 webView.evaluateJavascript(
-                        "showResult('" + safeMessage + "')",
-                        null
+                    "showResult('" + safeMessage + "')",
+                    null
                 )
         );
     }
 
-    // Permission callback
     @Override
     public void onRequestPermissionsResult(
             int requestCode,
@@ -154,19 +189,19 @@ public class MainActivity extends AppCompatActivity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 
         if (requestCode == REQUEST_CALL_PERMISSION &&
-            grantResults.length > 0 &&
-            grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                grantResults.length > 0 &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED) {
 
             if (pendingUSSDCode != null) {
                 executeUSSD(pendingUSSDCode);
                 pendingUSSDCode = null;
             }
+
         } else {
             sendResultToWeb("Permission denied");
         }
     }
 
-    // Handle back button
     @Override
     public void onBackPressed() {
         if (webView.canGoBack()) {
