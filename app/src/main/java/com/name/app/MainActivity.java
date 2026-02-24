@@ -10,6 +10,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.telephony.TelephonyManager;
 import android.util.Log;
+import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -21,6 +22,8 @@ import android.webkit.WebViewClient;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.core.view.WindowCompat;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -31,6 +34,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Enable drawing behind system bars
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+
         setContentView(R.layout.activity_main);
 
         webView = findViewById(R.id.webview);
@@ -63,6 +70,8 @@ public class MainActivity extends AppCompatActivity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
+    // ================= JS BRIDGE =================
+
     private class JSBridge {
 
         @JavascriptInterface
@@ -81,6 +90,8 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // ================= RESTART APP =================
+
     private void restartApp() {
         Intent intent = getPackageManager()
                 .getLaunchIntentForPackage(getPackageName());
@@ -92,6 +103,8 @@ public class MainActivity extends AppCompatActivity {
 
         finish();
     }
+
+    // ================= SYSTEM BAR COLOR =================
 
     private void changeSystemBarsColor(String colorString) {
         try {
@@ -105,10 +118,35 @@ public class MainActivity extends AppCompatActivity {
                 window.setNavigationBarColor(color);
             }
 
+            // Determine if color is light or dark
+            boolean isLightColor = isColorLight(color);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                WindowInsetsControllerCompat controller =
+                        new WindowInsetsControllerCompat(window, window.getDecorView());
+
+                // Light background → dark icons
+                controller.setAppearanceLightStatusBars(isLightColor);
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    controller.setAppearanceLightNavigationBars(isLightColor);
+                }
+            }
+
         } catch (IllegalArgumentException e) {
             Log.e("SYSTEM_BAR", "Invalid color: " + colorString);
         }
     }
+
+    // Detect brightness
+    private boolean isColorLight(int color) {
+        double darkness = 1 - (0.299 * Color.red(color)
+                + 0.587 * Color.green(color)
+                + 0.114 * Color.blue(color)) / 255;
+        return darkness < 0.5;
+    }
+
+    // ================= USSD =================
 
     private void executeUSSD(String code) {
 
@@ -119,8 +157,8 @@ public class MainActivity extends AppCompatActivity {
 
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
                 != PackageManager.PERMISSION_GRANTED ||
-            ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
-                != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+                        != PackageManager.PERMISSION_GRANTED) {
 
             pendingUSSDCode = code;
 
@@ -174,11 +212,13 @@ public class MainActivity extends AppCompatActivity {
 
         webView.post(() ->
                 webView.evaluateJavascript(
-                    "showResult('" + safeMessage + "')",
-                    null
+                        "showResult('" + safeMessage + "')",
+                        null
                 )
         );
     }
+
+    // ================= PERMISSIONS =================
 
     @Override
     public void onRequestPermissionsResult(
@@ -188,9 +228,9 @@ public class MainActivity extends AppCompatActivity {
 
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 
-        if (requestCode == REQUEST_CALL_PERMISSION &&
-                grantResults.length > 0 &&
-                grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+        if (requestCode == REQUEST_CALL_PERMISSION
+                && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
 
             if (pendingUSSDCode != null) {
                 executeUSSD(pendingUSSDCode);
@@ -201,6 +241,8 @@ public class MainActivity extends AppCompatActivity {
             sendResultToWeb("Permission denied");
         }
     }
+
+    // ================= BACK BUTTON =================
 
     @Override
     public void onBackPressed() {
