@@ -14,7 +14,6 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
-import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -22,6 +21,7 @@ import android.webkit.WebViewClient;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -36,6 +36,14 @@ public class MainActivity extends AppCompatActivity {
 
         webView = findViewById(R.id.webview);
 
+        setupWebView();
+
+        
+        webView.loadUrl("file:///android_asset/index.html");
+    }
+
+    private void setupWebView() {
+
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -44,24 +52,9 @@ public class MainActivity extends AppCompatActivity {
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
 
-        webView.setWebViewClient(new WebViewClient() {
-
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                view.loadUrl(url);
-                return true;
-            }
-
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                view.loadUrl(request.getUrl().toString());
-                return true;
-            }
-        });
+        webView.setWebViewClient(new WebViewClient());
 
         webView.addJavascriptInterface(new JSBridge(), "AndroidUSSD");
-
-        webView.loadUrl("file:///android_asset/index.html");
     }
 
     private class JSBridge {
@@ -112,28 +105,21 @@ public class MainActivity extends AppCompatActivity {
                 if (colorString.equalsIgnoreCase("#FFFFFF") ||
                         colorString.equalsIgnoreCase("#FFFFFFFF")) {
 
-                    // White background → dark icons
                     decor.setSystemUiVisibility(
                             decor.getSystemUiVisibility()
                                     | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
                     );
 
-                } else if (colorString.equalsIgnoreCase("#000000") ||
-                        colorString.equalsIgnoreCase("#FF000000")) {
+                } else {
 
-                    // Black background → light icons
                     decor.setSystemUiVisibility(
                             decor.getSystemUiVisibility()
                                     & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
                     );
-
-                } else {
-                    // Default system behavior
-                    decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
                 }
             }
 
-        } catch (IllegalArgumentException e) {
+        } catch (Exception e) {
             Log.e("SYSTEM_BAR", "Invalid color: " + colorString);
         }
     }
@@ -145,9 +131,9 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
                 != PackageManager.PERMISSION_GRANTED ||
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
                         != PackageManager.PERMISSION_GRANTED) {
 
             pendingUSSDCode = code;
@@ -164,6 +150,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         TelephonyManager tm = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+
         if (tm == null) {
             sendResultToWeb("Telephony service unavailable");
             return;
@@ -177,7 +164,6 @@ public class MainActivity extends AppCompatActivity {
                     String request,
                     CharSequence response) {
 
-                Log.d("USSD", "Success: " + response);
                 sendResultToWeb(response.toString());
             }
 
@@ -187,7 +173,6 @@ public class MainActivity extends AppCompatActivity {
                     String request,
                     int failureCode) {
 
-                Log.e("USSD", "Failed: " + failureCode);
                 sendResultToWeb("USSD failed: " + failureCode);
             }
 
@@ -195,6 +180,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void sendResultToWeb(String message) {
+
         String safeMessage = message
                 .replace("\\", "\\\\")
                 .replace("'", "\\'")
