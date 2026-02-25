@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -38,7 +39,6 @@ public class MainActivity extends AppCompatActivity {
 
         setupWebView();
 
-        
         webView.loadUrl("file:///android_asset/index.html");
     }
 
@@ -54,10 +54,18 @@ public class MainActivity extends AppCompatActivity {
 
         webView.setWebViewClient(new WebViewClient());
 
-        webView.addJavascriptInterface(new JSBridge(), "AndroidUSSD");
+        webView.addJavascriptInterface(new JSBridge(), "Android");
     }
 
     private class JSBridge {
+
+        @JavascriptInterface
+        public void openExternal(String url) {
+            runOnUiThread(() -> {
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                startActivity(intent);
+            });
+        }
 
         @JavascriptInterface
         public void runUssd(String code) {
@@ -97,26 +105,6 @@ public class MainActivity extends AppCompatActivity {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 window.setStatusBarColor(color);
                 window.setNavigationBarColor(color);
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                View decor = window.getDecorView();
-
-                if (colorString.equalsIgnoreCase("#FFFFFF") ||
-                        colorString.equalsIgnoreCase("#FFFFFFFF")) {
-
-                    decor.setSystemUiVisibility(
-                            decor.getSystemUiVisibility()
-                                    | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                    );
-
-                } else {
-
-                    decor.setSystemUiVisibility(
-                            decor.getSystemUiVisibility()
-                                    & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                    );
-                }
             }
 
         } catch (Exception e) {
