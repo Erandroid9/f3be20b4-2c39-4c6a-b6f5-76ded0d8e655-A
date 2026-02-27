@@ -4,14 +4,14 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.telephony.SubscriptionInfo;
+import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Log;
-import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -23,6 +23,8 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -36,7 +38,6 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         webView = findViewById(R.id.webview);
-
         setupWebView();
 
         webView.loadUrl("file:///android_asset/index.html");
@@ -53,8 +54,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setUseWideViewPort(true);
 
         webView.setWebViewClient(new WebViewClient());
-
-        webView.addJavascriptInterface(new JSBridge(), "Android");
+        webView.addJavascriptInterface(new JSBridge(), "AndroidUSSD");
     }
 
     private class JSBridge {
@@ -62,14 +62,15 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void openExternal(String url) {
             runOnUiThread(() -> {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                Intent intent = new Intent(Intent.ACTION_VIEW);
+                intent.setData(android.net.Uri.parse(url));
                 startActivity(intent);
             });
         }
 
         @JavascriptInterface
-        public void runUssd(String code) {
-            runOnUiThread(() -> executeUSSD(code));
+        public void runUssd(String code, int simSlot) {
+            runOnUiThread(() -> executeUSSD(code, simSlot));
         }
 
         @JavascriptInterface
@@ -112,7 +113,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void executeUSSD(String code) {
+    private void executeUSSD(String code, int simSlot) {
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             sendResultToWeb("USSD supported on Android 8.0+ only");
@@ -124,7 +125,7 @@ public class MainActivity extends AppCompatActivity {
                 ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
                         != PackageManager.PERMISSION_GRANTED) {
 
-            pendingUSSDCode = code;
+            pendingUSSDCode = code + "|" + simSlot;
 
             ActivityCompat.requestPermissions(
                     this,
@@ -137,34 +138,51 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        TelephonyManager tm = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+        SubscriptionManager subscriptionManager =
+                (SubscriptionManager) getSystemService(TELEPHONY_SUBSCRIPTION_SERVICE);
 
-        if (tm == null) {
-            sendResultToWeb("Telephony service unavailable");
+        if (subscriptionManager == null) {
+            sendResultToWeb("Subscription service unavailable");
             return;
         }
 
-        tm.sendUssdRequest(code, new TelephonyManager.UssdResponseCallback() {
+        List<SubscriptionInfo> subscriptionInfoList =
+                subscriptionManager.getActiveSubscriptionInfoList();
 
-            @Override
-            public void onReceiveUssdResponse(
-                    TelephonyManager telephonyManager,
-                    String request,
-                    CharSequence response) {
+        if (subscriptionInfoList == null || subscriptionInfoList.size() <= simSlot) {
+            sendResultToWeb("Selected SIM not available");
+            return;
+        }
 
-                sendResultToWeb(response.toString());
-            }
+        int subscriptionId =
+                subscriptionInfoList.get(simSlot).getSubscriptionId();
 
-            @Override
-            public void onReceiveUssdResponseFailed(
-                    TelephonyManager telephonyManager,
-                    String request,
-                    int failureCode) {
+        TelephonyManager telephonyManager =
+                ((TelephonyManager) getSystemService(TELEPHONY_SERVICE))
+                        .createForSubscriptionId(subscriptionId);
 
-                sendResultToWeb("USSD failed: " + failureCode);
-            }
+        telephonyManager.sendUssdRequest(code,
+                new TelephonyManager.UssdResponseCallback() {
 
-        }, new Handler(Looper.getMainLooper()));
+                    @Override
+                    public void onReceiveUssdResponse(
+                            TelephonyManager telephonyManager,
+                            String request,
+                            CharSequence response) {
+
+                        sendResultToWeb(response.toString());
+                    }
+
+                    @Override
+                    public void onReceiveUssdResponseFailed(
+                            TelephonyManager telephonyManager,
+                            String request,
+                            int failureCode) {
+
+                        sendResultToWeb("USSD failed: " + failureCode);
+                    }
+
+                }, new Handler(Looper.getMainLooper()));
     }
 
     private void sendResultToWeb(String message) {
@@ -190,12 +208,17 @@ public class MainActivity extends AppCompatActivity {
 
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 
-        if (requestCode == REQUEST_CALL_PERMISSION &&
-                grantResults.length > 0 &&
-                grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+        if (requestCode == REQUEST_CALL_PERMISSION
+                && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
 
             if (pendingUSSDCode != null) {
-                executeUSSD(pendingUSSDCode);
+
+                String[] parts = pendingUSSDCode.split("\\|");
+                String code = parts[0];
+                int simSlot = Integer.parseInt(parts[1]);
+
+                executeUSSD(code, simSlot);
                 pendingUSSDCode = null;
             }
 
