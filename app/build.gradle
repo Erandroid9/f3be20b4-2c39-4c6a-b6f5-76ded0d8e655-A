@@ -2,7 +2,7 @@ import java.util.Properties
 
 apply plugin: 'com.android.application'
 
-def packageName = "com.erandix.movie_lander"
+def packageName = "com.erandix.movielander"
 def appName = "Movie Lander"
 def appCode = 1
 def appVersion = "1"
