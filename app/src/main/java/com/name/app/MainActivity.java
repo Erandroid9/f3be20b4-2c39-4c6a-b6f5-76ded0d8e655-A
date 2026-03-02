@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -29,8 +30,13 @@ import java.util.List;
 public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
-    private static final int REQUEST_CALL_PERMISSION = 1;
+
+    private static final int REQUEST_PERMISSIONS = 101;
+
     private String pendingUSSDCode;
+
+    private TelephonyManager activeTelephonyManager;
+    private boolean ussdSessionActive = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,15 +68,14 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void openExternal(String url) {
             runOnUiThread(() -> {
-                Intent intent = new Intent(Intent.ACTION_VIEW);
-                intent.setData(android.net.Uri.parse(url));
-                startActivity(intent);
+                try {
+                    Intent intent = new Intent(Intent.ACTION_VIEW);
+                    intent.setData(Uri.parse(url));
+                    startActivity(intent);
+                } catch (Exception e) {
+                    Log.e("OPEN_EXTERNAL", "Invalid URL: " + url);
+                }
             });
-        }
-
-        @JavascriptInterface
-        public void runUssd(String code, int simSlot) {
-            runOnUiThread(() -> executeUSSD(code, simSlot));
         }
 
         @JavascriptInterface
@@ -81,6 +86,21 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void setSystemBarsColor(String colorString) {
             runOnUiThread(() -> changeSystemBarsColor(colorString));
+        }
+
+        @JavascriptInterface
+        public void getAvailableSims() {
+            runOnUiThread(() -> sendAvailableSimsToWeb());
+        }
+
+        @JavascriptInterface
+        public void runUssd(String code, int simSlot) {
+            runOnUiThread(() -> executeUSSD(code, simSlot));
+        }
+
+        @JavascriptInterface
+        public void sendUssdInput(String input) {
+            runOnUiThread(() -> sendNextUssd(input));
         }
     }
 
@@ -113,28 +133,11 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void executeUSSD(String code, int simSlot) {
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            sendResultToWeb("USSD supported on Android 8.0+ only");
-            return;
-        }
+    private void sendAvailableSimsToWeb() {
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
-                != PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
-                        != PackageManager.PERMISSION_GRANTED) {
-
-            pendingUSSDCode = code + "|" + simSlot;
-
-            ActivityCompat.requestPermissions(
-                    this,
-                    new String[]{
-                            Manifest.permission.CALL_PHONE,
-                            Manifest.permission.READ_PHONE_STATE
-                    },
-                    REQUEST_CALL_PERMISSION
-            );
+        if (!hasPermissions()) {
+            requestPermissions();
             return;
         }
 
@@ -146,20 +149,83 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        List<SubscriptionInfo> subscriptionInfoList =
+        List<SubscriptionInfo> subscriptionList =
                 subscriptionManager.getActiveSubscriptionInfoList();
 
-        if (subscriptionInfoList == null || subscriptionInfoList.size() <= simSlot) {
+        if (subscriptionList == null || subscriptionList.isEmpty()) {
+            sendResultToWeb("No active SIM cards found");
+            return;
+        }
+
+        StringBuilder simData = new StringBuilder("[");
+
+        for (SubscriptionInfo info : subscriptionList) {
+            simData.append("{")
+                    .append("\"slot\":").append(info.getSimSlotIndex()).append(",")
+                    .append("\"name\":\"").append(info.getDisplayName()).append("\"")
+                    .append("},");
+        }
+
+        simData.deleteCharAt(simData.length() - 1);
+        simData.append("]");
+
+        webView.post(() ->
+                webView.evaluateJavascript(
+                        "loadSimCards(" + simData + ")",
+                        null
+                )
+        );
+    }
+
+    private void executeUSSD(String code, int simSlot) {
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            sendResultToWeb("USSD supported on Android 8.0+ only");
+            return;
+        }
+
+        if (!hasPermissions()) {
+            pendingUSSDCode = code + "|" + simSlot;
+            requestPermissions();
+            return;
+        }
+
+        SubscriptionManager subscriptionManager =
+                (SubscriptionManager) getSystemService(TELEPHONY_SUBSCRIPTION_SERVICE);
+
+        if (subscriptionManager == null) {
+            sendResultToWeb("Subscription service unavailable");
+            return;
+        }
+
+        List<SubscriptionInfo> subscriptionList =
+                subscriptionManager.getActiveSubscriptionInfoList();
+
+        if (subscriptionList == null || subscriptionList.isEmpty()) {
+            sendResultToWeb("No active SIM cards");
+            return;
+        }
+
+        int subscriptionId = -1;
+
+        for (SubscriptionInfo info : subscriptionList) {
+            if (info.getSimSlotIndex() == simSlot) {
+                subscriptionId = info.getSubscriptionId();
+                break;
+            }
+        }
+
+        if (subscriptionId == -1) {
             sendResultToWeb("Selected SIM not available");
             return;
         }
 
-        int subscriptionId =
-                subscriptionInfoList.get(simSlot).getSubscriptionId();
-
         TelephonyManager telephonyManager =
                 ((TelephonyManager) getSystemService(TELEPHONY_SERVICE))
                         .createForSubscriptionId(subscriptionId);
+
+        activeTelephonyManager = telephonyManager;
+        ussdSessionActive = true;
 
         telephonyManager.sendUssdRequest(code,
                 new TelephonyManager.UssdResponseCallback() {
@@ -170,7 +236,7 @@ public class MainActivity extends AppCompatActivity {
                             String request,
                             CharSequence response) {
 
-                        sendResultToWeb(response.toString());
+                        sendUssdMenuToWeb(response.toString());
                     }
 
                     @Override
@@ -179,24 +245,60 @@ public class MainActivity extends AppCompatActivity {
                             String request,
                             int failureCode) {
 
+                        ussdSessionActive = false;
                         sendResultToWeb("USSD failed: " + failureCode);
                     }
 
                 }, new Handler(Looper.getMainLooper()));
     }
 
-    private void sendResultToWeb(String message) {
+    private void sendNextUssd(String input) {
 
-        String safeMessage = message
-                .replace("\\", "\\\\")
-                .replace("'", "\\'")
-                .replace("\n", "\\n");
+        if (!ussdSessionActive || activeTelephonyManager == null) {
+            sendResultToWeb("No active USSD session");
+            return;
+        }
 
-        webView.post(() ->
-                webView.evaluateJavascript(
-                        "showResult('" + safeMessage + "')",
-                        null
-                )
+        activeTelephonyManager.sendUssdRequest(input,
+                new TelephonyManager.UssdResponseCallback() {
+
+                    @Override
+                    public void onReceiveUssdResponse(
+                            TelephonyManager telephonyManager,
+                            String request,
+                            CharSequence response) {
+
+                        sendUssdMenuToWeb(response.toString());
+                    }
+
+                    @Override
+                    public void onReceiveUssdResponseFailed(
+                            TelephonyManager telephonyManager,
+                            String request,
+                            int failureCode) {
+
+                        ussdSessionActive = false;
+                        sendResultToWeb("Session ended");
+                    }
+
+                }, new Handler(Looper.getMainLooper()));
+    }
+
+    private boolean hasPermissions() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
+                == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+                        == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestPermissions() {
+        ActivityCompat.requestPermissions(
+                this,
+                new String[]{
+                        Manifest.permission.CALL_PHONE,
+                        Manifest.permission.READ_PHONE_STATE
+                },
+                REQUEST_PERMISSIONS
         );
     }
 
@@ -208,23 +310,60 @@ public class MainActivity extends AppCompatActivity {
 
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 
-        if (requestCode == REQUEST_CALL_PERMISSION
-                && grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+        if (requestCode == REQUEST_PERMISSIONS) {
 
-            if (pendingUSSDCode != null) {
+            boolean allGranted = true;
+
+            for (int result : grantResults) {
+                if (result != PackageManager.PERMISSION_GRANTED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+
+            if (allGranted && pendingUSSDCode != null) {
 
                 String[] parts = pendingUSSDCode.split("\\|");
                 String code = parts[0];
                 int simSlot = Integer.parseInt(parts[1]);
 
-                executeUSSD(code, simSlot);
                 pendingUSSDCode = null;
-            }
+                executeUSSD(code, simSlot);
 
-        } else {
-            sendResultToWeb("Permission denied");
+            } else if (!allGranted) {
+                sendResultToWeb("Permission denied");
+            }
         }
+    }
+
+    private void sendUssdMenuToWeb(String message) {
+
+        String safe = message
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n");
+
+        webView.post(() ->
+                webView.evaluateJavascript(
+                        "showUssdMenu('" + safe + "')",
+                        null
+                )
+        );
+    }
+
+    private void sendResultToWeb(String message) {
+
+        String safe = message
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n");
+
+        webView.post(() ->
+                webView.evaluateJavascript(
+                        "showResult('" + safe + "')",
+                        null
+                )
+        );
     }
 
     @Override
