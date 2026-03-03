@@ -4,7 +4,6 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -13,6 +12,7 @@ import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Log;
+import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -62,7 +62,8 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void openExternal(String url) {
             runOnUiThread(() -> {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                Intent intent = new Intent(Intent.ACTION_VIEW);
+                intent.setData(android.net.Uri.parse(url));
                 startActivity(intent);
             });
         }
@@ -98,23 +99,73 @@ public class MainActivity extends AppCompatActivity {
             int color = Color.parseColor(colorString);
             Window window = getWindow();
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 window.setStatusBarColor(color);
                 window.setNavigationBarColor(color);
             }
+
+            boolean isLightColor = isColorLight(color);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (window.getInsetsController() != null) {
+                    if (isLightColor) {
+                        window.getInsetsController().setSystemBarsAppearance(
+                                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                        );
+                    } else {
+                        window.getInsetsController().setSystemBarsAppearance(
+                                0,
+                                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                        );
+                    }
+                }
+            } else {
+                View decorView = window.getDecorView();
+                int flags = decorView.getSystemUiVisibility();
+
+                if (isLightColor) {
+                    flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                    }
+                } else {
+                    flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                    }
+                }
+
+                decorView.setSystemUiVisibility(flags);
+            }
+
         } catch (Exception e) {
             Log.e("SYSTEM_BAR", "Invalid color: " + colorString);
         }
     }
 
+    private boolean isColorLight(int color) {
+        double darkness = 1 - (0.299 * Color.red(color)
+                + 0.587 * Color.green(color)
+                + 0.114 * Color.blue(color)) / 255;
+        return darkness < 0.5;
+    }
+
     private void executeUSSD(String code, int simSlot) {
+
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             sendResultToWeb("USSD supported on Android 8.0+ only");
             return;
         }
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED
-                || ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
+                != PackageManager.PERMISSION_GRANTED
+                || ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+                != PackageManager.PERMISSION_GRANTED) {
 
             pendingUSSDCode = code + "|" + simSlot;
 
@@ -129,21 +180,24 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        SubscriptionManager subscriptionManager = (SubscriptionManager) getSystemService(TELEPHONY_SUBSCRIPTION_SERVICE);
+        SubscriptionManager subscriptionManager =
+                (SubscriptionManager) getSystemService(TELEPHONY_SUBSCRIPTION_SERVICE);
 
         if (subscriptionManager == null) {
             sendResultToWeb("Subscription service unavailable");
             return;
         }
 
-        List<SubscriptionInfo> subscriptionInfoList = subscriptionManager.getActiveSubscriptionInfoList();
+        List<SubscriptionInfo> subscriptionInfoList =
+                subscriptionManager.getActiveSubscriptionInfoList();
 
         if (subscriptionInfoList == null || subscriptionInfoList.size() <= simSlot) {
             sendResultToWeb("Selected SIM not available");
             return;
         }
 
-        int subscriptionId = subscriptionInfoList.get(simSlot).getSubscriptionId();
+        int subscriptionId =
+                subscriptionInfoList.get(simSlot).getSubscriptionId();
 
         TelephonyManager telephonyManager =
                 ((TelephonyManager) getSystemService(TELEPHONY_SERVICE))
@@ -152,16 +206,25 @@ public class MainActivity extends AppCompatActivity {
         try {
             telephonyManager.sendUssdRequest(code,
                     new TelephonyManager.UssdResponseCallback() {
+
                         @Override
-                        public void onReceiveUssdResponse(TelephonyManager telephonyManager, String request, CharSequence response) {
+                        public void onReceiveUssdResponse(
+                                TelephonyManager telephonyManager,
+                                String request,
+                                CharSequence response) {
                             sendResultToWeb(response.toString());
                         }
 
                         @Override
-                        public void onReceiveUssdResponseFailed(TelephonyManager telephonyManager, String request, int failureCode) {
+                        public void onReceiveUssdResponseFailed(
+                                TelephonyManager telephonyManager,
+                                String request,
+                                int failureCode) {
                             sendResultToWeb("USSD failed: " + failureCode);
                         }
+
                     }, new Handler(Looper.getMainLooper()));
+
         } catch (SecurityException e) {
             sendResultToWeb("Permission denied for USSD");
         } catch (Exception e) {
@@ -170,12 +233,20 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void sendResultToWeb(String message) {
-        String safeMessage = message.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n");
-        webView.post(() -> webView.evaluateJavascript("showResult('" + safeMessage + "')", null));
+        String safeMessage = message
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n");
+
+        webView.post(() ->
+                webView.evaluateJavascript(
+                        "showResult('" + safeMessage + "')", null));
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode,
+                                           @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 
         if (requestCode == REQUEST_CALL_PERMISSION
@@ -184,11 +255,10 @@ public class MainActivity extends AppCompatActivity {
 
             if (pendingUSSDCode != null) {
                 String[] parts = pendingUSSDCode.split("\\|");
-                String code = parts[0];
-                int simSlot = Integer.parseInt(parts[1]);
-                executeUSSD(code, simSlot);
+                executeUSSD(parts[0], Integer.parseInt(parts[1]));
                 pendingUSSDCode = null;
             }
+
         } else {
             sendResultToWeb("Permission denied");
         }
